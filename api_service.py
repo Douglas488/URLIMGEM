@@ -8,11 +8,25 @@ from pathlib import Path
 
 import openpyxl
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image as PILImage
 
 app = FastAPI(title="Excel Image Link Processor", version="1.0.0")
+
+# Allow browser calls from local preview and deployed frontends.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5500",
+        "http://localhost:5500",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["X-Changed-Cells", "X-Inserted-Images", "X-Failed-Images", "Content-Disposition"],
+)
 
 IMAGE_EXT = re.compile(r"\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)", re.IGNORECASE)
 URL_RE = re.compile(r"https?://\S+")

@@ -7,7 +7,7 @@ from io import BytesIO
 from pathlib import Path
 
 import openpyxl
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from openpyxl.drawing.image import Image as XLImage
@@ -18,10 +18,7 @@ app = FastAPI(title="Excel Image Link Processor", version="1.0.0")
 # Allow browser calls from local preview and deployed frontends.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5500",
-        "http://localhost:5500",
-    ],
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -37,6 +34,8 @@ def process_workbook(
     output_path: Path,
     max_thumb_size: tuple[int, int] = (220, 220),
     jpeg_quality: int = 60,
+    max_rows: int = 0,
+    image_timeout: int = 6,
 ) -> dict:
     wb = openpyxl.load_workbook(input_path)
     ws = wb.active
@@ -51,7 +50,8 @@ def process_workbook(
     image_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        for row in range(2, ws.max_row + 1):
+        end_row = ws.max_row if max_rows <= 0 else min(ws.max_row, max_rows + 1)
+        for row in range(2, end_row + 1):
             cell = ws.cell(row=row, column=5)  # E column
             value = cell.value
             if not isinstance(value, str) or not value.strip():
@@ -68,7 +68,7 @@ def process_workbook(
 
             try:
                 req = urllib.request.Request(keep, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=image_timeout) as resp:
                     image_bytes = resp.read()
 
                 pil_image = PILImage.open(BytesIO(image_bytes))
@@ -111,7 +111,12 @@ def health() -> JSONResponse:
 
 
 @app.post("/process")
-async def process_excel(file: UploadFile = File(...)) -> FileResponse:
+async def process_excel(
+    file: UploadFile = File(...),
+    max_rows: int = Query(default=120, ge=1, le=2000),
+    image_timeout: int = Query(default=6, ge=2, le=20),
+    jpeg_quality: int = Query(default=60, ge=35, le=90),
+) -> FileResponse:
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="请上传 .xlsx 文件")
 
@@ -123,7 +128,13 @@ async def process_excel(file: UploadFile = File(...)) -> FileResponse:
         content = await file.read()
         input_path.write_bytes(content)
 
-        stats = process_workbook(input_path, output_path)
+        stats = process_workbook(
+            input_path,
+            output_path,
+            jpeg_quality=jpeg_quality,
+            max_rows=max_rows,
+            image_timeout=image_timeout,
+        )
         download_name = file.filename.replace(".xlsx", "_with_images_small.xlsx")
 
         final_output = Path(tempfile.gettempdir()) / f"{uuid.uuid4().hex}_{download_name}"

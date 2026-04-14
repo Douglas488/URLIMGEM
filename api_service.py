@@ -113,7 +113,7 @@ def health() -> JSONResponse:
 @app.post("/process")
 async def process_excel(
     file: UploadFile = File(...),
-    max_rows: int = Query(default=120, ge=1, le=2000),
+    max_rows: int = Query(default=0, ge=0, le=2000),
     image_timeout: int = Query(default=6, ge=2, le=20),
     jpeg_quality: int = Query(default=60, ge=35, le=90),
 ) -> FileResponse:

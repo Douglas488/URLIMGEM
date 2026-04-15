@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 
 app = FastAPI(title="Excel Image Link Processor", version="1.0.0")
@@ -29,6 +30,50 @@ IMAGE_EXT = re.compile(r"\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)", re.IGNORECASE
 URL_RE = re.compile(r"https?://\S+")
 
 
+def _normalize_header(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip().lower()
+    # Remove separators to make fuzzy matching more tolerant.
+    return re.sub(r"[\s_\-()（）【】\[\]：:]+", "", text)
+
+
+def _find_image_source_column(ws) -> int:
+    """
+    Find the product-image URL column by header keywords.
+    Fallback to column E for compatibility with legacy templates.
+    """
+    header_keywords = [
+        "产品图片",
+        "商品图片",
+        "图片链接",
+        "图片url",
+        "imageurl",
+        "productimage",
+        "mainimage",
+        "imagem",
+        "imagemproduto",
+    ]
+    for col in range(1, ws.max_column + 1):
+        header = _normalize_header(ws.cell(row=1, column=col).value)
+        if not header:
+            continue
+        if any(k in header for k in header_keywords):
+            return col
+    return 5
+
+
+def _find_output_column(ws, source_col: int) -> int:
+    """
+    Use the nearest empty column to the right of source column.
+    If none is empty, append one at the end.
+    """
+    for col in range(source_col + 1, ws.max_column + 1):
+        if ws.cell(row=1, column=col).value in (None, ""):
+            return col
+    return ws.max_column + 1
+
+
 def process_workbook(
     input_path: Path,
     output_path: Path,
@@ -43,8 +88,11 @@ def process_workbook(
     changed = 0
     inserted = 0
     failed = 0
-    ws["F1"] = "首图"
-    ws.column_dimensions["F"].width = 18
+    source_col = _find_image_source_column(ws)
+    output_col = _find_output_column(ws, source_col)
+    output_col_letter = get_column_letter(output_col)
+    ws.cell(row=1, column=output_col).value = "首图"
+    ws.column_dimensions[output_col_letter].width = 18
 
     image_dir = output_path.parent / f"images_{uuid.uuid4().hex[:8]}"
     image_dir.mkdir(parents=True, exist_ok=True)
@@ -52,7 +100,7 @@ def process_workbook(
     try:
         end_row = ws.max_row if max_rows <= 0 else min(ws.max_row, max_rows + 1)
         for row in range(2, end_row + 1):
-            cell = ws.cell(row=row, column=5)  # E column
+            cell = ws.cell(row=row, column=source_col)
             value = cell.value
             if not isinstance(value, str) or not value.strip():
                 continue
@@ -92,7 +140,7 @@ def process_workbook(
                     excel_image.height = int(excel_image.height * ratio)
                     excel_image.width = int(excel_image.width * ratio)
 
-                ws.add_image(excel_image, f"F{row}")
+                ws.add_image(excel_image, f"{output_col_letter}{row}")
                 ws.row_dimensions[row].height = 72
                 inserted += 1
             except Exception:
